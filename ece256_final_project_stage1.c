@@ -58,7 +58,7 @@ const Step_t song[] = {
     {47, RED, 1000}
 };
 
-
+/* --------- INITIALIZATION ----------- */
 void PortF_Init_Interrupt(void) {
     SYSCTL_RCGCGPIO_R |= 0x20;                      // Enable clock for Port F
     while ((SYSCTL_RCGCGPIO_R & 0x20) == 0) {}      // Wait for clock
@@ -79,6 +79,28 @@ void PortF_Init_Interrupt(void) {
     NVIC_EN0_R |= (1 << 30);            // Enable Port F in NVIC
 }
 
+void PWM_Init(void)
+{
+    SYSCTL_RCGCGPIO_R |= 0x02;   // Enable clock for Port B
+    SYSCTL_RCGCPWM_R  |= 0x01;   // Enable clock for PWM Module 0
+
+    while ((SYSCTL_RCGCGPIO_R & 0x02) == 0) {}  // Wait for clock
+    while ((SYSCTL_RCGCPWM_R  & 0x01) == 0) {}  // Wait for clock
+
+    // Configure PB6 as PWM output (alternate function 4 = M0PWM0)
+    GPIO_PORTB_AFSEL_R |= 0x40;  
+    GPIO_PORTB_PCTL_R  = (GPIO_PORTB_PCTL_R & 0xF0FFFFFF) | 0x04000000;
+    GPIO_PORTB_DEN_R  |= 0x40;
+    GPIO_PORTB_AMSEL_R &= ~0x40;
+
+    // PWM Generator 0: count down, 440 Hz, 50% duty
+    PWM0_0_CTL_R  = 0;                               // Disable during setup
+    PWM0_0_GENA_R = 0x8C;                            // High at LOAD, low at CMPA
+    PWM0_0_LOAD_R = (SYSCLK / TONE_HZ) - 1;          // 440 Hz period
+    PWM0_0_CMPA_R = PWM0_0_LOAD_R / 2;               // 50% duty cycle
+    PWM0_0_CTL_R  = 1;                               // Enable generator
+    PWM0_ENABLE_R &= ~0x01;                          // Begin with PWM on PB6 disabled
+}
 
 /* -------------- Interrupt Handlers ---------------- */
 void GPIOPortF_Handler(void) {
@@ -95,18 +117,50 @@ void GPIOPortF_Handler(void) {
     }
 }
 
+/* ------------ GENERAL FUNCTIONS --------------- */
+void note(Step_t step) {
+    double frequency = 440 * pow(2.0, (step.note - 49) / 12.0); // Get frequency of note
+    double load = (SYSCLK / frequency - 1);                     // Get period of note
+
+    if (load > 65535) load = 65535;                          // prevent random overload values
+    PWM0_0_LOAD_R = load;                                    // set new period
+    PWM0_0_CMPA_R = load / 2;                                // set new duty cycle
+
+    PWM0_ENABLE_R |= 0x01;                                   // enable output
+    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~0x0E) | step.color;
+    delay(step.duration); /* Need to figure out how to do without using CPU time and pausing interrupts*/
+
+    PWM0_ENABLE_R &= ~0x01;                                  // stop sound
+    delay(25);
+}
+
+
 void FSM_Update(void) {
-    
+    switch (currentState) {
+        case IDLE: {
+            PWM0_ENABLE_R &= ~(0x01);       // Turn off audio
+            GPIO_PORTF_DATA_R &= ~(0x0F);   // Turn off LEDs
+            songIndex = 0;                  // Reset song index
+            break;
+        }
+
+        case PLAY: {            
+            Step_t step = song[songIndex];
+            playNote(step);
+            songIndex++;
+            break;
+        }
+
+
+        case PAUSE: {
+            PWM0_ENABLE_R &= ~(0x01);  // Turn off audio
+            break;
+        }
+    }
 }
 
 int main(void) {
+    PortF_Init_Interrupt();
+    PWM_Init();
 
-    switch (currentState) {
-        case IDLE:
-            /* reset index, turn off leds and audio */
-        case PLAY:
-            /* play audio and led, iterate thru index */
-        case PAUSE:
-            /* hold index, pause led and audio (off)*/
-    }
 }
