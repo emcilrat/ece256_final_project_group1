@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "fsm.h"
+#include <math.h>
 
 // System control registers & NVIC
 #define SYSCTL_RCGCGPIO_R   (*((volatile uint32_t *)0x400FE608))  // GPIO clock
@@ -14,7 +15,6 @@
 #define GPIO_PORTF_PUR_R    (*((volatile uint32_t *)0x40025510)) //   Pull-up resistor
 #define GPIO_PORTF_LOCK_R   (*((volatile uint32_t *)0x40025520)) //   Lock register
 #define GPIO_PORTF_CR_R     (*((volatile uint32_t *)0x40025524)) //   Commit register
-#define SYSCTL_RCGCGPIO_R   (*((volatile uint32_t *)0x400FE608)) //   Clock control
 // Interrupt registers
 #define   GPIO_PORTF_IS_R     (*((volatile   uint32_t   *)0x40025404))   //   Int   sense
 #define   GPIO_PORTF_IBE_R    (*((volatile   uint32_t   *)0x40025408))   //   Int   both edges
@@ -41,25 +41,46 @@
 #define SYST_RVR   (*((volatile uint32_t *)0xE000E014)) // Reload Value Register
 #define SYST_CVR   (*((volatile uint32_t *)0xE000E018)) // Current Value Register
 
-#define RED   (1 << 1)
-#define BLUE  (1 << 2)
-#define GREEN (1 << 3)
-#define SW1   (1 << 4)
-#define SW2   (1 << 0)
+#define NOTE_GAP_MS 30
+#define SYSCLK  16000000
+#define FS      1000
+#define RED    (1 << 1)
+#define BLUE   (1 << 2)
+#define GREEN  (1 << 3)
+#define COLORS (RED | BLUE | GREEN)
+#define SW1    (1 << 4)
+#define SW2    (1 << 0)
 
-volatile State_t currentState = IDLE;  // Current state, can take on all possible states
-volatile uint16_t songIndex = 0;
+static volatile State_t currentState = IDLE;  // Current state, can take on all possible states
+static volatile uint16_t songIndex = 0;       // Current position in song
+static volatile uint16_t tick = 0;            // Aid SysTick to get desired delays
+static volatile uint16_t noteTimer = 0;       // Track duration of note
+static volatile uint8_t noteActive = 0;       // Track whether note is or is not playing
+static volatile uint16_t gapTimer = 0;        // Track duration between note
+static volatile uint8_t paused = 0;           // Track whether song is paused or not
 
 // Song to be played, each step is {note, color}
-const Step_t song[] = {
+const Step_t song[] = 
+{
     {40, RED, 500}, {40, BLUE, 500},
     {47, GREEN, 500}, {47, RED, 500},
     {49, BLUE, 500}, {49, GREEN, 500},
     {47, RED, 1000}
 };
 
+#define SONG_LEN (sizeof(song)/sizeof(song[0]))
+
 /* --------- INITIALIZATION ----------- */
-void PortF_Init_Interrupt(void) {
+void SysTick_Init(void) 
+{
+    SYST_CSR = 0;               
+    SYST_RVR = SYSCLK / FS - 1;  // Interrupt fires every 1 ms
+    SYST_CVR = 0;              
+    SYST_CSR = 0x07;            
+}
+
+void PortF_Init_Interrupt(void) 
+{
     SYSCTL_RCGCGPIO_R |= 0x20;                      // Enable clock for Port F
     while ((SYSCTL_RCGCGPIO_R & 0x20) == 0) {}      // Wait for clock
 
@@ -96,71 +117,131 @@ void PWM_Init(void)
     // PWM Generator 0: count down, 440 Hz, 50% duty
     PWM0_0_CTL_R  = 0;                               // Disable during setup
     PWM0_0_GENA_R = 0x8C;                            // High at LOAD, low at CMPA
-    PWM0_0_LOAD_R = (SYSCLK / TONE_HZ) - 1;          // 440 Hz period
-    PWM0_0_CMPA_R = PWM0_0_LOAD_R / 2;               // 50% duty cycle
+    PWM0_0_LOAD_R = 0;                               // 440 Hz period
+    PWM0_0_CMPA_R = 0;                               // 50% duty cycle
     PWM0_0_CTL_R  = 1;                               // Enable generator
     PWM0_ENABLE_R &= ~0x01;                          // Begin with PWM on PB6 disabled
 }
 
 /* -------------- Interrupt Handlers ---------------- */
-void GPIOPortF_Handler(void) {
+void SysTick_Handler(void)
+{
+    if (paused) return;
+
+    if (noteActive)                   // Note is playing
+    {
+        if (noteTimer > 0)            // Note should still be playing
+        {
+            noteTimer--;
+        }
+        else                          // Note is finished; prepare to stall
+        {
+            PWM0_ENABLE_R &= ~0x01;
+            noteActive = 0;
+            gapTimer = NOTE_GAP_MS;   // start gap AFTER note ends
+        }
+    }
+    else if (gapTimer > 0)            // Stall between notes
+    {
+        gapTimer--;
+    }
+}
+
+void GPIOF_Handler(void) 
+{
     /* Switch 1 pressed */
-    if (!(GPIO_PORTF_DATA_R & SW1)) {
+    if (!(GPIO_PORTF_DATA_R & SW1)) 
+    {
         if (currentState == IDLE) currentState = PLAY;
         else if (currentState == PLAY) currentState = PAUSE;
         else if (currentState == PAUSE) currentState = PLAY;
     }
     
     /* Switch 2 pressed */
-    if (!(GPIO_PORTF_DATA_R & SW2)) {
+    if (!(GPIO_PORTF_DATA_R & SW2)) 
+    {
         currentState = IDLE;
     }
+
+    GPIO_PORTF_ICR_R = (SW1 | SW2);
+
 }
 
 /* ------------ GENERAL FUNCTIONS --------------- */
-void note(Step_t step) {
-    double frequency = 440 * pow(2.0, (step.note - 49) / 12.0); // Get frequency of note
-    double load = (SYSCLK / frequency - 1);                     // Get period of note
+void playNote(Step_t step)
+{
+    double frequency = 440 * exp2((step.note - 49) / 12.0);
+    uint32_t load = (SYSCLK / frequency) - 1;
 
-    if (load > 65535) load = 65535;                          // prevent random overload values
-    PWM0_0_LOAD_R = load;                                    // set new period
-    PWM0_0_CMPA_R = load / 2;                                // set new duty cycle
+    if (load < 2) load = 2;
+    if (load > 65535) load = 65535;
 
-    PWM0_ENABLE_R |= 0x01;                                   // enable output
-    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~0x0E) | step.color;
-    delay(step.duration); /* Need to figure out how to do without using CPU time and pausing interrupts*/
+    PWM0_0_LOAD_R = load;
+    PWM0_0_CMPA_R = load / 2;
 
-    PWM0_ENABLE_R &= ~0x01;                                  // stop sound
-    delay(25);
+    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~COLORS) | step.color;
+
+    PWM0_ENABLE_R |= 0x01;
+
+    noteTimer = (step.duration > NOTE_GAP_MS)
+                ? (step.duration - NOTE_GAP_MS)
+                : step.duration;
+
+    noteActive = 1;
 }
 
 
-void FSM_Update(void) {
-    switch (currentState) {
-        case IDLE: {
+void FSM_Update(void) 
+{
+    switch (currentState) 
+    {
+        case IDLE: 
+        {
             PWM0_ENABLE_R &= ~(0x01);       // Turn off audio
-            GPIO_PORTF_DATA_R &= ~(0x0F);   // Turn off LEDs
+            GPIO_PORTF_DATA_R &= ~(0x0E);   // Turn off LEDs
             songIndex = 0;                  // Reset song index
             break;
         }
 
-        case PLAY: {            
-            Step_t step = song[songIndex];
-            playNote(step);
-            songIndex++;
+        case PLAY: 
+        {
+            if (paused) 
+            {
+                paused = 0;
+                PWM0_ENABLE_R = 0x01;
+            }
+
+            if (!noteActive && gapTimer == 0)   // wait for BOTH note + gap
+            {
+                if (songIndex >= SONG_LEN)
+                {
+                    currentState = IDLE;
+                    break;
+                }
+
+                playNote(song[songIndex]);
+                songIndex++;
+            }
             break;
         }
 
-
-        case PAUSE: {
+        case PAUSE: 
+        {
             PWM0_ENABLE_R &= ~(0x01);  // Turn off audio
+            paused = 1;
             break;
         }
     }
 }
 
-int main(void) {
+int main(void) 
+{
     PortF_Init_Interrupt();
     PWM_Init();
+    SysTick_Init();
 
+    while (1) 
+    {
+        FSM_Update();
+    }
 }
