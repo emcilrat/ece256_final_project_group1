@@ -5,7 +5,8 @@
 // System control registers & NVIC
 #define SYSCTL_RCGCGPIO_R   (*((volatile uint32_t *)0x400FE608))  // GPIO clock
 #define SYSCTL_RCGCPWM_R    (*((volatile uint32_t *)0x400FE640))  // PWM clock
-#define NVIC_EN0_R             (*((volatile uint32_t *)0xE000E100))      // IRQ 0-31 enable
+#define SYSCTL_RCGCUART_R    (*((volatile uint32_t *)0x400FE618)) // UART clock
+#define NVIC_EN0_R          (*((volatile uint32_t *)0xE000E100))  // IRQ 0-31 enable
 
 // Register addresses for Port F (base address 0x40025000 + offset)
 #define GPIO_PORTF_DATA_R   (*((volatile uint32_t *)0x400253FC)) //   Data register
@@ -21,6 +22,26 @@
 #define   GPIO_PORTF_IEV_R    (*((volatile   uint32_t   *)0x4002540C))   //   Int   event
 #define   GPIO_PORTF_IM_R     (*((volatile   uint32_t   *)0x40025410))   //   Int   mask
 #define   GPIO_PORTF_ICR_R    (*((volatile   uint32_t   *)0x4002541C))   //   Int   clear
+
+// GPIO Port A
+#define GPIO_PORTA_DATA_R    (*((volatile uint32_t *)0x400043FC))   // Data
+#define GPIO_PORTA_DIR_R     (*((volatile uint32_t *)0x40004400))   // Direction
+#define GPIO_PORTA_AFSEL_R   (*((volatile uint32_t *)0x40004420))   // Alternate function select
+#define GPIO_PORTA_DEN_R     (*((volatile uint32_t *)0x4000451C))   // Digital enable
+#define GPIO_PORTA_AMSEL_R   (*((volatile uint32_t *)0x40004528))   // Analog mode select
+#define GPIO_PORTA_PCTL_R    (*((volatile uint32_t *)0x4000452C))   // Port control (mux)
+// UART0
+// UART0 (base address 0x4000C000 + offset)
+#define UART0_DATA_R  (*((volatile uint32_t *)0x4000C000))  // Data register
+#define UART0_FLAG_R  (*((volatile uint32_t *)0x4000C018))  // Flag register
+#define UART0_IBRD_R  (*((volatile uint32_t *)0x4000C024))  // Integer baud rate
+#define UART0_FBRD_R  (*((volatile uint32_t *)0x4000C028))  // Fractional baud rate
+#define UART0_LCRH_R  (*((volatile uint32_t *)0x4000C02C))  // Line control
+#define UART0_CTL_R   (*((volatile uint32_t *)0x4000C030))  // Control
+#define UART0_IM_R    (*((volatile uint32_t *)0x4000C038))  // Interrupt mask
+#define UART0_RIS_R   (*((volatile uint32_t *)0x4000C03C))  // Raw interrupt status
+#define UART0_MIS_R   (*((volatile uint32_t *)0x4000C040))  // Masked interrupt status
+#define UART0_ICR_R   (*((volatile uint32_t *)0x4000C044))  // Interrupt clear
 
 // GPIO Port B registers (base: 0x40005000)
 #define GPIO_PORTB_AFSEL_R  (*((volatile uint32_t *)0x40005420))  // Alt function
@@ -59,7 +80,7 @@ static volatile uint8_t noteActive = 0;       // Track whether note is or is not
 static volatile uint16_t gapTimer = 0;        // Track duration between note
 static volatile uint8_t paused = 0;           // Track whether song is paused or not
 
-// Song to be played, each step is {note, color}
+// Song to be played, each step is {note, color, duration}
 const Step_t song[] = 
 {
     {40, RED, 500}, {40, BLUE, 500},
@@ -77,6 +98,28 @@ void SysTick_Init(void)
     SYST_RVR = SYSCLK / FS - 1;  // Interrupt fires every 1 ms
     SYST_CVR = 0;              
     SYST_CSR = 0x07;            
+}
+
+void UART0_Init(void) {
+    SYSCTL_RCGCUART_R |= 0x01;
+    SYSCTL_RCGCGPIO_R |= 0x01;
+
+    while ((SYSCTL_RCGCUART_R & 0x01) == 0) {}  // Wait for clock
+    while ((SYSCTL_RCGCGPIO_R & 0x01) == 0) {}  // Wait for clock
+
+    GPIO_PORTA_AFSEL_R |= 0x03;
+    GPIO_PORTA_PCTL_R  |= 0x11;
+    GPIO_PORTA_DEN_R   |= 0x03;
+
+    UART0_CTL_R  &= ~(0x01);
+    UART0_IBRD_R  = 8;
+    UART0_FBRD_R  = 44;
+
+    UART0_LCRH_R  = 0x60;
+    UART0_IM_R   |= 0x10;
+    UART0_CTL_R  |= 0x301;
+
+    NVIC_EN0_R   |= (1 << 5);
 }
 
 void PortF_Init_Interrupt(void) 
@@ -124,6 +167,24 @@ void PWM_Init(void)
 }
 
 /* -------------- Interrupt Handlers ---------------- */
+void UART0_Handler(void) {
+    char c = UART0_DATA_R & 0xFF; // Read byte (also clears RX FIFO slot)
+    UART0_ICR_R = 0x10;           // Clear the interrupt flag
+
+    if (c == 'p' || c == ' ')      // Begin play or toggle play-pause
+    { 
+        if (currentState == IDLE) currentState = PLAY;
+        else if (currentState == PLAY) currentState = PAUSE;
+        else if (currentState == PAUSE) currentState = PLAY;
+    }
+
+    if (c == 'r') // Reset song, go to IDLE
+    {
+        currentState = IDLE;
+    }
+    
+}
+
 void SysTick_Handler(void)
 {
     if (paused) return;
@@ -198,8 +259,12 @@ void FSM_Update(void)
         case IDLE: 
         {
             PWM0_ENABLE_R &= ~(0x01);       // Turn off audio
-            GPIO_PORTF_DATA_R &= ~(0x0E);   // Turn off LEDs
+            GPIO_PORTF_DATA_R &= ~COLORS;   // Turn off LEDs
             songIndex = 0;                  // Reset song index
+            noteActive = 0;                 // Stop all notes
+            gapTimer = 0;                   // Stop all gaps
+            noteTimer = 0;                  
+            paused = 0;     
             break;
         }
 
@@ -239,6 +304,7 @@ int main(void)
     PortF_Init_Interrupt();
     PWM_Init();
     SysTick_Init();
+    UART0_Init();
 
     while (1) 
     {
