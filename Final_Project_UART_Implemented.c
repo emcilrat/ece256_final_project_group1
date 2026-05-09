@@ -55,6 +55,7 @@
 #define PWM0_0_LOAD_R       (*((volatile uint32_t *)0x40028050))
 #define PWM0_0_CMPA_R       (*((volatile uint32_t *)0x40028058))
 #define PWM0_0_GENA_R       (*((volatile uint32_t *)0x40028060))
+#define SYSCTL_RCC_R        (*((volatile uint32_t *)0x400FE060))
 
 // SysTick
 #define SYST_CSR            (*((volatile uint32_t *)0xE000E010))
@@ -77,15 +78,49 @@
 #define SW2    (1 << 0)
 
 /* =============================================================================
- * Song Data
+ * Audio Data
  * ============================================================================= */
 
-const Step_t song[] =
-{
-    {40, RED,   500}, {40, BLUE,  500},
-    {47, GREEN, 500}, {47, RED,   500},
-    {49, BLUE,  500}, {49, GREEN, 500},
-    {47, RED,  1000}
+const Step_t song[] = {
+    // --- Phrase 1: "Deck the halls with boughs of holly" ---
+    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, // G, F, E, D
+    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200}, // C, D, E, C
+    
+    // --- The "Fa-la-la" (FAST STROBE) ---
+    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},   // D, E, F, D
+    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200}, // E, D, C, B
+    {60, BLUE, 400},                                                 // C (Hold)
+
+    // --- Phrase 2: "Tis the season to be jolly" ---
+    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, 
+    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200},
+
+    // --- The "Fa-la-la" (FAST STROBE 2) ---
+    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},
+    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200},
+    {60, BLUE, 400},
+
+    // --- The Bridge: "Don we now our gay apparel" ---
+    {62, GREEN, 300}, {64, RED, 100}, {65, BLUE, 200}, {62, GREEN, 200}, // D, E, F, D
+    {64, RED, 300}, {65, BLUE, 100}, {67, GREEN, 200}, {62, RED, 200},  // E, F, G, D
+    {64, BLUE, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, BLUE, 100}, {71, GREEN, 100}, // E, F#, G, A, B (Climb!)
+    {72, RED, 400}                                                      // High C!
+};
+
+const Step_t scare_crash[] = {
+    {60, 0x0A, 60}, {50, 0x02, 60}, {40, 0x0A, 80}, 
+    {30, 0x02, 100}, {20, 0x0A, 150}, {10, 0x02, 300}
+};
+
+const Step_t scare_stinger[] = {
+    {72, 0x06, 50}, {78, 0x02, 50}, {72, 0x06, 50}, 
+    {78, 0x02, 50}, {72, 0x06, 50}, {78, 0x02, 50}, 
+    {84, 0x06, 400}
+};
+
+const Step_t scare_creep[] = {
+    {28, 0x0A, 250}, {29, 0x02, 250}, {28, 0x0A, 250}, 
+    {29, 0x02, 250}, {25, 0x0A, 500}, {20, 0x02, 800}
 };
 
 #define SONG_LEN (sizeof(song) / sizeof(song[0]))
@@ -94,12 +129,21 @@ const Step_t song[] =
  * State Variables
  * ============================================================================= */
 
-static volatile State_t currentState = IDLE;
-static volatile uint16_t songIndex  = 0;
-static volatile uint16_t noteTimer  = 0;
-static volatile uint16_t gapTimer   = 0;
-static volatile uint8_t  noteActive = 0;
-static volatile uint8_t  paused     = 0;
+static volatile State_t  currentState = IDLE;
+static volatile uint16_t songIndex    = 0;
+static volatile uint16_t noteTimer    = 0;
+static volatile uint16_t gapTimer     = 0;
+static volatile uint8_t  noteActive   = 0;
+static volatile uint8_t  paused       = 0;
+static volatile uint8_t  scareActive  = 0;
+
+static const Step_t* currentScareArray;
+static uint8_t scareLen = 0;
+static uint8_t scareIndex = 0;
+
+static int16_t grinchBrightness = 0; // Current "on-time" in ms
+static int8_t fadeDirection = 1;     // 1 for fading in, -1 for fading out
+static uint16_t fadeTimer = 0;       // Slows down the fade speed
 
 /* =============================================================================
  * State Transition Helpers
@@ -112,10 +156,17 @@ static void togglePlayPause(void)
         currentState = PLAY;
         UART0_SendString("Current State: PLAY\r\n");
     }
-    else
+    else if (currentState == PLAY)
     {
-        currentState = PAUSE;
-        UART0_SendString("Current State: PAUSE\r\n");
+        // Pick a random scare sequence
+        uint32_t r = SYST_CVR % 3; 
+        if (r == 0) { currentScareArray = scare_crash; scareLen = 6; }
+        else if (r == 1) { currentScareArray = scare_stinger; scareLen = 7; }
+        else { currentScareArray = scare_creep; scareLen = 6; }
+
+        scareIndex = 0;
+        currentState = SCARE;
+        UART0_SendString("Current State: SCARE\r\n");
     }
 }
 
@@ -186,6 +237,9 @@ void PWM_Init(void)
     while (!(SYSCTL_RCGCGPIO_R & 0x02)) {}
     while (!(SYSCTL_RCGCPWM_R  & 0x01)) {}
 
+    SYSCTL_RCC_R &= ~0x001E0000; 
+    SYSCTL_RCC_R |= 0x001E0000;
+    
     GPIO_PORTB_AFSEL_R |=  0x40;
     GPIO_PORTB_PCTL_R   = (GPIO_PORTB_PCTL_R & 0xF0FFFFFF) | 0x04000000;
     GPIO_PORTB_DEN_R   |=  0x40;
@@ -214,21 +268,42 @@ void UART0_Handler(void)
 
 void SysTick_Handler(void)
 {
-    if (paused) return;
-
-    if (noteActive)
-    {
-        if (noteTimer > 0)  noteTimer--;
-        else
-        {
-            PWM0_ENABLE_R &= ~0x01;
-            noteActive = 0;
-            gapTimer = NOTE_GAP_MS;
+    static uint16_t grinchPWM = 0;
+    
+    // --- 1. EXISTING SONG TIMING ---
+    if (!paused) {
+        if (noteActive) {
+            if (noteTimer > 0) noteTimer--;
+            else {
+                PWM0_ENABLE_R &= ~0x01;
+                noteActive = 0;
+                gapTimer = NOTE_GAP_MS;
+            }
+        } else if (gapTimer > 0) {
+            gapTimer--;
         }
     }
-    else if (gapTimer > 0)
-    {
-        gapTimer--;
+
+    // --- 2. GRINCH FADE OVERLAP ---
+    // Only runs when the FSM is in the PAUSE state
+    if (currentState == PAUSE) {
+        grinchPWM++;
+        if (grinchPWM >= 10) grinchPWM = 0; // 10ms cycle
+
+        // Soft-PWM: If brightness is 3, LED is ON for 3ms, OFF for 7ms
+        if (grinchPWM < grinchBrightness) {
+            GPIO_PORTF_DATA_R |= GREEN; 
+        } else {
+            GPIO_PORTF_DATA_R &= ~GREEN;
+        }
+
+        // Slow down the "breath" speed
+        fadeTimer++;
+        if (fadeTimer >= 20) { // Adjust this for faster/slower breathing
+            fadeTimer = 0;
+            grinchBrightness += fadeDirection;
+            if (grinchBrightness >= 10 || grinchBrightness <= 0) fadeDirection *= -1;
+        }
     }
 }
 
@@ -257,16 +332,19 @@ void UART0_SendString(const char *str)
 
 void playNote(Step_t step)
 {
-    uint32_t load = (uint32_t)(SYSCLK / (440.0 * exp2((step.note - 49) / 12.0))) - 1;
-    if (load < 2)     load = 2;
-    if (load > 65535) load = 65535;
+    double freq = 440.0 * pow(2.0, (step.note - 49) / 12.0);
+    uint32_t load = (uint32_t)(250000.0 / freq) - 1;
+
+    if (load < 2)      load = 2;
+    if (load > 65535)  load = 65535;
 
     PWM0_0_LOAD_R = load;
-    PWM0_0_CMPA_R = load / 2;
+    PWM0_0_CMPA_R = load / 2; 
+    
     GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~COLORS) | step.color;
     PWM0_ENABLE_R |= 0x01;
 
-    noteTimer  = (step.duration > NOTE_GAP_MS) ? (step.duration - NOTE_GAP_MS) : step.duration;
+    noteTimer = (step.duration > NOTE_GAP_MS) ? (step.duration - NOTE_GAP_MS) : step.duration;
     noteActive = 1;
 }
 
@@ -293,9 +371,27 @@ void FSM_Update(void)
             }
             break;
 
+        case SCARE:
+            if (!noteActive && gapTimer == 0)
+            {
+                if (scareIndex >= scareLen) 
+                { 
+                    UART0_SendString("Current State: PAUSE\r\n");
+                    currentState = PAUSE; // Finally pause after scare
+                    break; 
+                }
+                playNote(currentScareArray[scareIndex++]);
+            }
+            break;
+
         case PAUSE:
-            PWM0_ENABLE_R &= ~0x01;
-            paused = 1;
+            if (!paused) { // This runs only ONCE when we first enter PAUSE
+                PWM0_ENABLE_R &= ~0x01;  // Stop sound
+                GPIO_PORTF_DATA_R &= ~COLORS; // WIPE ALL LEDS (Red, Green, Blue)
+                paused = 1;
+                grinchBrightness = 0;   // Reset oscillation starting point
+                fadeDirection = 1;
+            }
             break;
     }
 }
@@ -313,3 +409,42 @@ int main(void)
 
     while (1) FSM_Update();
 }
+
+/* POSSIBLE SONGS
+const Step_t deck_the_halls[] = {
+    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, 
+    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200}, 
+    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},   
+    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200}, 
+    {60, BLUE, 400},                                                 
+    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200},
+    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200},
+    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},
+    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200},
+    {60, BLUE, 400},
+    {62, GREEN, 300}, {64, RED, 100}, {65, BLUE, 200}, {62, GREEN, 200}, 
+    {64, RED, 300}, {65, BLUE, 100}, {67, GREEN, 200}, {62, RED, 200},  
+    {64, BLUE, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, BLUE, 100}, {71, GREEN, 100}, 
+    {72, RED, 400}                                                      
+};
+
+const Step_t merry_christmas[] = {
+    {60, RED, 500},   // C
+    {65, GREEN, 500}, {65, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, {64, RED, 250}, 
+    {62, BLUE, 500}, {62, GREEN, 500}, {62, RED, 500}, 
+    {67, BLUE, 500}, {67, GREEN, 250}, {69, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, 
+    {64, RED, 500}, {60, BLUE, 500}, {60, GREEN, 500}, 
+    {69, RED, 500}, {69, GREEN, 250}, {70, BLUE, 250}, {69, RED, 250}, {67, BLUE, 250}, 
+    {65, GREEN, 500}, {62, RED, 500}, {60, BLUE, 250}, {60, GREEN, 250}, 
+    {62, RED, 500}, {67, BLUE, 500}, {64, GREEN, 500}, {65, RED, 1000} 
+};
+
+const Step_t jingle_bells[] = {
+    {64, RED, 250}, {64, RED, 250}, {64, BLUE, 500},     
+    {64, RED, 250}, {64, RED, 250}, {64, BLUE, 500},     
+    {64, RED, 250}, {67, BLUE, 250}, {60, GREEN, 375}, {62, RED, 125}, {64, BLUE, 1000}, 
+    {65, RED, 250}, {65, BLUE, 250}, {65, GREEN, 375}, {65, RED, 125}, 
+    {65, RED, 250}, {64, BLUE, 250}, {64, GREEN, 250}, {64, RED, 125}, {64, BLUE, 125}, 
+    {67, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, {62, RED, 250}, {60, BLUE, 1000}  
+};
+*/
