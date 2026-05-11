@@ -20,6 +20,8 @@
 #define GPIO_PORTA_PCTL_R   (*((volatile uint32_t *)0x4000452C))
 
 // Port B
+#define GPIO_PORTB_DATA_R   (*((volatile uint32_t *)0x400053FC))
+#define GPIO_PORTB_DIR_R    (*((volatile uint32_t *)0x40005400))
 #define GPIO_PORTB_AFSEL_R  (*((volatile uint32_t *)0x40005420))
 #define GPIO_PORTB_DEN_R    (*((volatile uint32_t *)0x4000551C))
 #define GPIO_PORTB_AMSEL_R  (*((volatile uint32_t *)0x40005528))
@@ -76,6 +78,17 @@
 #define COLORS (RED | BLUE | GREEN)
 #define SW1    (1 << 4)
 #define SW2    (1 << 0)
+
+#define SR_SER_PIN   (1 << 3)  // PB3 - Serial Data
+#define SR_SRCLK_PIN (1 << 4)  // PB4 - Shift Clock
+#define SR_RCLK_PIN  (1 << 5)  // PB5 - Latch Clock
+
+#define SR_SER_LOW()    (GPIO_PORTB_DATA_R &= ~SR_SER_PIN)
+#define SR_SER_HIGH()   (GPIO_PORTB_DATA_R |=  SR_SER_PIN)
+#define SR_SRCLK_LOW()  (GPIO_PORTB_DATA_R &= ~SR_SRCLK_PIN)
+#define SR_SRCLK_HIGH() (GPIO_PORTB_DATA_R |=  SR_SRCLK_PIN)
+#define SR_RCLK_LOW()   (GPIO_PORTB_DATA_R &= ~SR_RCLK_PIN)
+#define SR_RCLK_HIGH()  (GPIO_PORTB_DATA_R |=  SR_RCLK_PIN)
 
 /* =============================================================================
  * Audio Data
@@ -335,17 +348,61 @@ void playNote(Step_t step)
     double freq = 440.0 * pow(2.0, (step.note - 49) / 12.0);
     uint32_t load = (uint32_t)(250000.0 / freq) - 1;
 
-    if (load < 2)      load = 2;
-    if (load > 65535)  load = 65535;
+    if (load < 2)     load = 2;
+    if (load > 65535) load = 65535;
 
     PWM0_0_LOAD_R = load;
-    PWM0_0_CMPA_R = load / 2; 
-    
-    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~COLORS) | step.color;
-    PWM0_ENABLE_R |= 0x01;
+    PWM0_0_CMPA_R = load / 2;
 
+    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~COLORS) | step.color;
+
+    // Mirror color to shift register outputs
+    // Map: bit0=RED, bit1=BLUE, bit2=GREEN (adjust to match your wiring)
+    uint8_t extLEDs = 0;
+    if (step.color & RED)   extLEDs |= (1 << 0);
+    if (step.color & BLUE)  extLEDs |= (1 << 1);
+    if (step.color & GREEN) extLEDs |= (1 << 2);
+    ShiftReg_Send(extLEDs);
+
+    PWM0_ENABLE_R |= 0x01;
     noteTimer = (step.duration > NOTE_GAP_MS) ? (step.duration - NOTE_GAP_MS) : step.duration;
     noteActive = 1;
+}
+
+void ShiftReg_Init(void)
+{
+    // Port B clock is already enabled in PWM_Init, but guard it here too
+    SYSCTL_RCGCGPIO_R |= 0x02;
+    while (!(SYSCTL_RCGCGPIO_R & 0x02)) {}
+
+    // Set PB3, PB4, PB5 as outputs
+    GPIO_PORTB_DIR_R   |=  (SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
+    GPIO_PORTB_DEN_R   |=  (SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
+    GPIO_PORTB_AFSEL_R &= ~(SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
+
+    // Start with all lines low, latch outputs clear
+    SR_SER_LOW();
+    SR_SRCLK_LOW();
+    SR_RCLK_LOW();
+    ShiftReg_Send(0x00); // Clear all external LEDs on boot
+}
+
+void ShiftReg_Send(uint8_t data)
+{
+    SR_RCLK_LOW();
+    int i;
+    for (i = 7; i >= 0; i--)
+    {
+        SR_SRCLK_LOW();
+
+        if (data & (1 << i)) SR_SER_HIGH();
+        else                  SR_SER_LOW();
+
+        SR_SRCLK_HIGH(); // Clock the bit in
+    }
+
+    SR_RCLK_HIGH(); // Latch to outputs
+    SR_RCLK_LOW();
 }
 
 /* =============================================================================
@@ -404,8 +461,10 @@ int main(void)
 {
     PortF_Init_Interrupt();
     PWM_Init();
+    ShiftReg_Init();
     SysTick_Init();
     UART0_Init();
+    GPIO_PORTB_DATA_R |= (1 << 4) || (1 << 3) || (1 << 2);
 
     while (1) FSM_Update();
 }
