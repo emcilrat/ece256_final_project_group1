@@ -75,7 +75,8 @@
 #define RED    (1 << 1)
 #define BLUE   (1 << 2)
 #define GREEN  (1 << 3)
-#define COLORS (RED | BLUE | GREEN)
+#define ON_BOARD_COLORS (RED | BLUE | GREEN)
+
 #define SW1    (1 << 4)
 #define SW2    (1 << 0)
 
@@ -96,28 +97,28 @@
 
 const Step_t song[] = {
     // --- Phrase 1: "Deck the halls with boughs of holly" ---
-    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, // G, F, E, D
-    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200}, // C, D, E, C
-    
+    {67, RED, 300}, {65, GREEN, 100}, {64, RED, 200}, {62, GREEN, 200}, // G, F, E, D
+    {60, RED, 200}, {62, GREEN, 200}, {64, RED, 200}, {60, GREEN, 200}, // C, D, E, C
+
     // --- The "Fa-la-la" (FAST STROBE) ---
-    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},   // D, E, F, D
-    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200}, // E, D, C, B
-    {60, BLUE, 400},                                                 // C (Hold)
+    {62, RED, 100}, {64, GREEN, 100}, {65, RED, 100}, {62, GREEN, 100},   // D, E, F, D
+    {64, RED, 200}, {62, GREEN, 200}, {60, RED, 200}, {59, GREEN, 200}, // E, D, C, B
+    {60, RED, 400},                                                 // C (Hold)
 
     // --- Phrase 2: "Tis the season to be jolly" ---
-    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, 
-    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200},
+    {67, GREEN, 300}, {65, RED, 100}, {64, GREEN, 200}, {62, RED, 200},
+    {60, GREEN, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, RED, 200},
 
     // --- The "Fa-la-la" (FAST STROBE 2) ---
-    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},
-    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200},
-    {60, BLUE, 400},
+    {62, GREEN, 100}, {64, RED, 100}, {65, GREEN, 100}, {62, RED, 100},
+    {64, GREEN, 200}, {62, RED, 200}, {60, GREEN, 200}, {59, RED, 200},
+    {60, GREEN, 400},
 
     // --- The Bridge: "Don we now our gay apparel" ---
-    {62, GREEN, 300}, {64, RED, 100}, {65, BLUE, 200}, {62, GREEN, 200}, // D, E, F, D
-    {64, RED, 300}, {65, BLUE, 100}, {67, GREEN, 200}, {62, RED, 200},  // E, F, G, D
-    {64, BLUE, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, BLUE, 100}, {71, GREEN, 100}, // E, F#, G, A, B (Climb!)
-    {72, RED, 400}                                                      // High C!
+    {62, RED, 300}, {64, GREEN, 100}, {65, RED, 200}, {62, GREEN, 200}, // D, E, F, D
+    {64, RED, 300}, {65, GREEN, 100}, {67, RED, 200}, {62, GREEN, 200},  // E, F, G, D
+    {64, RED, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, GREEN, 100}, {71, RED, 100}, // E, F#, G, A, B (Climb!)
+    {72, GREEN, 400}                                                      // High C!
 };
 
 const Step_t scare_crash[] = {
@@ -157,6 +158,8 @@ static uint8_t scareIndex = 0;
 static int16_t grinchBrightness = 0; // Current "on-time" in ms
 static int8_t fadeDirection = 1;     // 1 for fading in, -1 for fading out
 static uint16_t fadeTimer = 0;       // Slows down the fade speed
+
+static volatile uint8_t srState = 0x00;
 
 /* =============================================================================
  * State Transition Helpers
@@ -354,15 +357,16 @@ void playNote(Step_t step)
     PWM0_0_LOAD_R = load;
     PWM0_0_CMPA_R = load / 2;
 
-    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~COLORS) | step.color;
+    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~ON_BOARD_COLORS) | step.color;
 
     // Mirror color to shift register outputs
     // Map: bit0=RED, bit1=BLUE, bit2=GREEN (adjust to match your wiring)
-    uint8_t extLEDs = 0;
-    if (step.color & RED)   extLEDs |= (1 << 0);
-    if (step.color & BLUE)  extLEDs |= (1 << 1);
-    if (step.color & GREEN) extLEDs |= (1 << 2);
-    ShiftReg_Send(extLEDs);
+    srState = 0;
+    if (step.color & RED)   srState |= (1 << 0);
+    if (step.color & GREEN) srState |= (1 << 1);
+    if (step.color & BLUE)  srState |= (1 << 2);
+
+    ShiftReg_Send(srState);
 
     PWM0_ENABLE_R |= 0x01;
     noteTimer = (step.duration > NOTE_GAP_MS) ? (step.duration - NOTE_GAP_MS) : step.duration;
@@ -415,7 +419,9 @@ void FSM_Update(void)
     {
         case IDLE:
             PWM0_ENABLE_R     &= ~0x01;
-            GPIO_PORTF_DATA_R &= ~COLORS;
+            GPIO_PORTF_DATA_R &= ~ON_BOARD_COLORS;
+            srState = 0x00;
+            ShiftReg_Send(srState);
             songIndex = noteActive = gapTimer = noteTimer = paused = 0;
             break;
 
@@ -444,7 +450,9 @@ void FSM_Update(void)
         case PAUSE:
             if (!paused) { // This runs only ONCE when we first enter PAUSE
                 PWM0_ENABLE_R &= ~0x01;  // Stop sound
-                GPIO_PORTF_DATA_R &= ~COLORS; // WIPE ALL LEDS (Red, Green, Blue)
+                GPIO_PORTF_DATA_R &= ~ON_BOARD_COLORS; // WIPE ALL LEDS (Red, Green, Blue)
+                srState = 0x00;
+                ShiftReg_Send(srState);
                 paused = 1;
                 grinchBrightness = 0;   // Reset oscillation starting point
                 fadeDirection = 1;
@@ -464,46 +472,9 @@ int main(void)
     ShiftReg_Init();
     SysTick_Init();
     UART0_Init();
-    GPIO_PORTB_DATA_R |= (1 << 4) || (1 << 3) || (1 << 2);
+
+    srState = 15;
+    ShiftReg_Send(srState);
 
     while (1) FSM_Update();
 }
-
-/* POSSIBLE SONGS
-const Step_t deck_the_halls[] = {
-    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200}, 
-    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200}, 
-    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},   
-    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200}, 
-    {60, BLUE, 400},                                                 
-    {67, RED, 300}, {65, BLUE, 100}, {64, GREEN, 200}, {62, RED, 200},
-    {60, BLUE, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, BLUE, 200},
-    {62, RED, 100}, {64, BLUE, 100}, {65, RED, 100}, {62, BLUE, 100},
-    {64, RED, 200}, {62, BLUE, 200}, {60, GREEN, 200}, {59, RED, 200},
-    {60, BLUE, 400},
-    {62, GREEN, 300}, {64, RED, 100}, {65, BLUE, 200}, {62, GREEN, 200}, 
-    {64, RED, 300}, {65, BLUE, 100}, {67, GREEN, 200}, {62, RED, 200},  
-    {64, BLUE, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, BLUE, 100}, {71, GREEN, 100}, 
-    {72, RED, 400}                                                      
-};
-
-const Step_t merry_christmas[] = {
-    {60, RED, 500},   // C
-    {65, GREEN, 500}, {65, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, {64, RED, 250}, 
-    {62, BLUE, 500}, {62, GREEN, 500}, {62, RED, 500}, 
-    {67, BLUE, 500}, {67, GREEN, 250}, {69, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, 
-    {64, RED, 500}, {60, BLUE, 500}, {60, GREEN, 500}, 
-    {69, RED, 500}, {69, GREEN, 250}, {70, BLUE, 250}, {69, RED, 250}, {67, BLUE, 250}, 
-    {65, GREEN, 500}, {62, RED, 500}, {60, BLUE, 250}, {60, GREEN, 250}, 
-    {62, RED, 500}, {67, BLUE, 500}, {64, GREEN, 500}, {65, RED, 1000} 
-};
-
-const Step_t jingle_bells[] = {
-    {64, RED, 250}, {64, RED, 250}, {64, BLUE, 500},     
-    {64, RED, 250}, {64, RED, 250}, {64, BLUE, 500},     
-    {64, RED, 250}, {67, BLUE, 250}, {60, GREEN, 375}, {62, RED, 125}, {64, BLUE, 1000}, 
-    {65, RED, 250}, {65, BLUE, 250}, {65, GREEN, 375}, {65, RED, 125}, 
-    {65, RED, 250}, {64, BLUE, 250}, {64, GREEN, 250}, {64, RED, 125}, {64, BLUE, 125}, 
-    {67, RED, 250}, {67, BLUE, 250}, {65, GREEN, 250}, {62, RED, 250}, {60, BLUE, 1000}  
-};
-*/
