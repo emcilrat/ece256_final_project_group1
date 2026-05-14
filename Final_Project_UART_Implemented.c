@@ -29,7 +29,6 @@
 
 // Port F
 #define GPIO_PORTF_DATA_R   (*((volatile uint32_t *)0x400253FC))
-#define GPIO_PORTF_DIR_R    (*((volatile uint32_t *)0x40025400))
 #define GPIO_PORTF_AFSEL_R  (*((volatile uint32_t *)0x40025420))
 #define GPIO_PORTF_DEN_R    (*((volatile uint32_t *)0x4002551C))
 #define GPIO_PORTF_PUR_R    (*((volatile uint32_t *)0x40025510))
@@ -72,11 +71,6 @@
 #define FS          1000
 #define NOTE_GAP_MS 30
 
-#define RED    (1 << 1)
-#define BLUE   (1 << 2)
-#define GREEN  (1 << 3)
-#define ON_BOARD_COLORS (RED | BLUE | GREEN)
-
 #define SW1    (1 << 4)
 #define SW2    (1 << 0)
 
@@ -97,44 +91,53 @@
 
 const Step_t song[] = {
     // --- Phrase 1: "Deck the halls with boughs of holly" ---
-    {67, RED, 300}, {65, GREEN, 100}, {64, RED, 200}, {62, GREEN, 200}, // G, F, E, D
-    {60, RED, 200}, {62, GREEN, 200}, {64, RED, 200}, {60, GREEN, 200}, // C, D, E, C
+    {67, 0x1, 300}, {65, 0x2, 100}, {64, 0x1, 200}, {62, 0x2, 200}, // G, F, E, D
+    {60, 0x1, 200}, {62, 0x2, 200}, {64, 0x1, 200}, {60, 0x2, 200}, // C, D, E, C
 
     // --- The "Fa-la-la" (FAST STROBE) ---
-    {62, RED, 100}, {64, GREEN, 100}, {65, RED, 100}, {62, GREEN, 100},   // D, E, F, D
-    {64, RED, 200}, {62, GREEN, 200}, {60, RED, 200}, {59, GREEN, 200}, // E, D, C, B
-    {60, RED, 400},                                                 // C (Hold)
+    {62, 0x1, 100}, {64, 0x2, 100}, {65, 0x1, 100}, {62, 0x2, 100},
+    {64, 0x1, 200}, {62, 0x2, 200}, {60, 0x1, 200}, {59, 0x2, 200},
+    {60, 0x1, 400},
 
     // --- Phrase 2: "Tis the season to be jolly" ---
-    {67, GREEN, 300}, {65, RED, 100}, {64, GREEN, 200}, {62, RED, 200},
-    {60, GREEN, 200}, {62, RED, 200}, {64, GREEN, 200}, {60, RED, 200},
+    {67, 0x2, 300}, {65, 0x1, 100}, {64, 0x2, 200}, {62, 0x1, 200},
+    {60, 0x2, 200}, {62, 0x1, 200}, {64, 0x2, 200}, {60, 0x1, 200},
 
     // --- The "Fa-la-la" (FAST STROBE 2) ---
-    {62, GREEN, 100}, {64, RED, 100}, {65, GREEN, 100}, {62, RED, 100},
-    {64, GREEN, 200}, {62, RED, 200}, {60, GREEN, 200}, {59, RED, 200},
-    {60, GREEN, 400},
+    {62, 0x2, 100}, {64, 0x1, 100}, {65, 0x2, 100}, {62, 0x1, 100},
+    {64, 0x2, 200}, {62, 0x1, 200}, {60, 0x2, 200}, {59, 0x1, 200},
+    {60, 0x2, 400},
 
     // --- The Bridge: "Don we now our gay apparel" ---
-    {62, RED, 300}, {64, GREEN, 100}, {65, RED, 200}, {62, GREEN, 200}, // D, E, F, D
-    {64, RED, 300}, {65, GREEN, 100}, {67, RED, 200}, {62, GREEN, 200},  // E, F, G, D
-    {64, RED, 100}, {66, GREEN, 100}, {67, RED, 200}, {69, GREEN, 100}, {71, RED, 100}, // E, F#, G, A, B (Climb!)
-    {72, GREEN, 400}                                                      // High C!
+    {62, 0x1, 300}, {64, 0x2, 100}, {65, 0x1, 200}, {62, 0x2, 200},
+    {64, 0x1, 300}, {65, 0x2, 100}, {67, 0x1, 200}, {62, 0x2, 200},
+    {64, 0x1, 100}, {66, 0x2, 100}, {67, 0x1, 200}, {69, 0x2, 100}, {71, 0x1, 100},
+    {72, 0x2, 400},
+
+    // --- FINALE: reprise Phrase 1, then ride the climb out ---
+    {67, 0x1, 300}, {65, 0x2, 100}, {64, 0x1, 200}, {62, 0x2, 200}, // G, F, E, D
+    {60, 0x1, 200}, {62, 0x2, 200}, {64, 0x1, 200}, {60, 0x2, 200}, // C, D, E, C
+
+    // --- Final climb — bigger than the bridge ---
+    {62, 0x1, 100}, {64, 0x2, 100}, {65, 0x1, 100}, {67, 0x2, 100},
+    {69, 0x1, 100}, {71, 0x2, 100}, {72, 0x1, 100}, {74, 0x2, 100},
+    {76, 0x1, 800}
 };
 
 const Step_t scare_crash[] = {
-    {60, 0x0A, 60}, {50, 0x02, 60}, {40, 0x0A, 80}, 
-    {30, 0x02, 100}, {20, 0x0A, 150}, {10, 0x02, 300}
+    {60, 0x01, 60}, {50, 0x6, 60}, {40, 0x01, 80},
+    {30, 0x06, 100}, {20, 0x05, 150}, {10, 0x02, 300}
 };
 
 const Step_t scare_stinger[] = {
-    {72, 0x06, 50}, {78, 0x02, 50}, {72, 0x06, 50}, 
-    {78, 0x02, 50}, {72, 0x06, 50}, {78, 0x02, 50}, 
-    {84, 0x06, 400}
+    {72, 0x01, 50}, {78, 0x06, 50}, {72, 0x05, 50},
+    {78, 0x02, 50}, {72, 0x01, 50}, {78, 0x06, 50},
+    {84, 0x05, 400}
 };
 
 const Step_t scare_creep[] = {
-    {28, 0x0A, 250}, {29, 0x02, 250}, {28, 0x0A, 250}, 
-    {29, 0x02, 250}, {25, 0x0A, 500}, {20, 0x02, 800}
+    {28, 0x01, 250}, {29, 0x6, 250}, {28, 0x01, 250},
+    {29, 0x06, 250}, {25, 0x5, 500}, {20, 0x02, 800}
 };
 
 #define SONG_LEN (sizeof(song) / sizeof(song[0]))
@@ -149,15 +152,14 @@ static volatile uint16_t noteTimer    = 0;
 static volatile uint16_t gapTimer     = 0;
 static volatile uint8_t  noteActive   = 0;
 static volatile uint8_t  paused       = 0;
-static volatile uint8_t  scareActive  = 0;
 
 static const Step_t* currentScareArray;
-static uint8_t scareLen = 0;
+static uint8_t scareLen   = 0;
 static uint8_t scareIndex = 0;
 
-static int16_t grinchBrightness = 0; // Current "on-time" in ms
-static int8_t fadeDirection = 1;     // 1 for fading in, -1 for fading out
-static uint16_t fadeTimer = 0;       // Slows down the fade speed
+static int16_t grinchBrightness = 0;
+static int8_t  fadeDirection    = 1;
+static uint16_t fadeTimer       = 0;
 
 static volatile uint8_t srState = 0x00;
 
@@ -174,11 +176,10 @@ static void togglePlayPause(void)
     }
     else if (currentState == PLAY)
     {
-        // Pick a random scare sequence
-        uint32_t r = SYST_CVR % 3; 
-        if (r == 0) { currentScareArray = scare_crash; scareLen = 6; }
+        uint32_t r = SYST_CVR % 3;
+        if      (r == 0) { currentScareArray = scare_crash;   scareLen = 6; }
         else if (r == 1) { currentScareArray = scare_stinger; scareLen = 7; }
-        else { currentScareArray = scare_creep; scareLen = 6; }
+        else             { currentScareArray = scare_creep;   scareLen = 6; }
 
         scareIndex = 0;
         currentState = SCARE;
@@ -232,7 +233,6 @@ void PortF_Init_Interrupt(void)
 
     GPIO_PORTF_LOCK_R  = 0x4C4F434B;
     GPIO_PORTF_CR_R    = 0x1F;
-    GPIO_PORTF_DIR_R   = 0x0E;
     GPIO_PORTF_AFSEL_R = 0x00;
     GPIO_PORTF_PUR_R   = 0x11;
     GPIO_PORTF_DEN_R   = 0x1F;
@@ -253,9 +253,9 @@ void PWM_Init(void)
     while (!(SYSCTL_RCGCGPIO_R & 0x02)) {}
     while (!(SYSCTL_RCGCPWM_R  & 0x01)) {}
 
-    SYSCTL_RCC_R &= ~0x001E0000; 
-    SYSCTL_RCC_R |= 0x001E0000;
-    
+    SYSCTL_RCC_R &= ~0x001E0000;
+    SYSCTL_RCC_R |=  0x001E0000;
+
     GPIO_PORTB_AFSEL_R |=  0x40;
     GPIO_PORTB_PCTL_R   = (GPIO_PORTB_PCTL_R & 0xF0FFFFFF) | 0x04000000;
     GPIO_PORTB_DEN_R   |=  0x40;
@@ -285,8 +285,8 @@ void UART0_Handler(void)
 void SysTick_Handler(void)
 {
     static uint16_t grinchPWM = 0;
-    
-    // --- 1. EXISTING SONG TIMING ---
+
+    // --- 1. Song timing ---
     if (!paused) {
         if (noteActive) {
             if (noteTimer > 0) noteTimer--;
@@ -300,22 +300,20 @@ void SysTick_Handler(void)
         }
     }
 
-    // --- 2. GRINCH FADE OVERLAP ---
-    // Only runs when the FSM is in the PAUSE state
+    // --- 2. Grinch LED soft-PWM fade (PAUSE state only) ---
     if (currentState == PAUSE) {
         grinchPWM++;
-        if (grinchPWM >= 10) grinchPWM = 0; // 10ms cycle
+        if (grinchPWM >= 10) grinchPWM = 0;
 
-        // Soft-PWM: If brightness is 3, LED is ON for 3ms, OFF for 7ms
         if (grinchPWM < grinchBrightness) {
-            GPIO_PORTF_DATA_R |= GREEN; 
+            srState |= 0x08;
         } else {
-            GPIO_PORTF_DATA_R &= ~GREEN;
+            srState &= ~0x08;
         }
+        ShiftReg_Send(srState);
 
-        // Slow down the "breath" speed
         fadeTimer++;
-        if (fadeTimer >= 20) { // Adjust this for faster/slower breathing
+        if (fadeTimer >= 50) {
             fadeTimer = 0;
             grinchBrightness += fadeDirection;
             if (grinchBrightness >= 10 || grinchBrightness <= 0) fadeDirection *= -1;
@@ -357,15 +355,7 @@ void playNote(Step_t step)
     PWM0_0_LOAD_R = load;
     PWM0_0_CMPA_R = load / 2;
 
-    GPIO_PORTF_DATA_R = (GPIO_PORTF_DATA_R & ~ON_BOARD_COLORS) | step.color;
-
-    // Mirror color to shift register outputs
-    // Map: bit0=RED, bit1=BLUE, bit2=GREEN (adjust to match your wiring)
-    srState = 0;
-    if (step.color & RED)   srState |= (1 << 0);
-    if (step.color & GREEN) srState |= (1 << 1);
-    if (step.color & BLUE)  srState |= (1 << 2);
-
+    srState = step.data;
     ShiftReg_Send(srState);
 
     PWM0_ENABLE_R |= 0x01;
@@ -375,20 +365,17 @@ void playNote(Step_t step)
 
 void ShiftReg_Init(void)
 {
-    // Port B clock is already enabled in PWM_Init, but guard it here too
     SYSCTL_RCGCGPIO_R |= 0x02;
     while (!(SYSCTL_RCGCGPIO_R & 0x02)) {}
 
-    // Set PB3, PB4, PB5 as outputs
     GPIO_PORTB_DIR_R   |=  (SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
     GPIO_PORTB_DEN_R   |=  (SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
     GPIO_PORTB_AFSEL_R &= ~(SR_SER_PIN | SR_SRCLK_PIN | SR_RCLK_PIN);
 
-    // Start with all lines low, latch outputs clear
     SR_SER_LOW();
     SR_SRCLK_LOW();
     SR_RCLK_LOW();
-    ShiftReg_Send(0x00); // Clear all external LEDs on boot
+    ShiftReg_Send(0x00);
 }
 
 void ShiftReg_Send(uint8_t data)
@@ -398,14 +385,11 @@ void ShiftReg_Send(uint8_t data)
     for (i = 7; i >= 0; i--)
     {
         SR_SRCLK_LOW();
-
         if (data & (1 << i)) SR_SER_HIGH();
         else                  SR_SER_LOW();
-
-        SR_SRCLK_HIGH(); // Clock the bit in
+        SR_SRCLK_HIGH();
     }
-
-    SR_RCLK_HIGH(); // Latch to outputs
+    SR_RCLK_HIGH();
     SR_RCLK_LOW();
 }
 
@@ -418,8 +402,7 @@ void FSM_Update(void)
     switch (currentState)
     {
         case IDLE:
-            PWM0_ENABLE_R     &= ~0x01;
-            GPIO_PORTF_DATA_R &= ~ON_BOARD_COLORS;
+            PWM0_ENABLE_R &= ~0x01;
             srState = 0x00;
             ShiftReg_Send(srState);
             songIndex = noteActive = gapTimer = noteTimer = paused = 0;
@@ -432,29 +415,30 @@ void FSM_Update(void)
                 if (songIndex >= SONG_LEN) { resetToIdle(); break; }
                 playNote(song[songIndex++]);
             }
+            srState |= (1 << 2);
+            ShiftReg_Send(srState);
             break;
 
         case SCARE:
             if (!noteActive && gapTimer == 0)
             {
-                if (scareIndex >= scareLen) 
-                { 
+                if (scareIndex >= scareLen)
+                {
                     UART0_SendString("Current State: PAUSE\r\n");
-                    currentState = PAUSE; // Finally pause after scare
-                    break; 
+                    currentState = PAUSE;
+                    break;
                 }
                 playNote(currentScareArray[scareIndex++]);
             }
             break;
 
         case PAUSE:
-            if (!paused) { // This runs only ONCE when we first enter PAUSE
-                PWM0_ENABLE_R &= ~0x01;  // Stop sound
-                GPIO_PORTF_DATA_R &= ~ON_BOARD_COLORS; // WIPE ALL LEDS (Red, Green, Blue)
+            if (!paused) {
+                PWM0_ENABLE_R &= ~0x01;
                 srState = 0x00;
                 ShiftReg_Send(srState);
                 paused = 1;
-                grinchBrightness = 0;   // Reset oscillation starting point
+                grinchBrightness = 0;
                 fadeDirection = 1;
             }
             break;
